@@ -357,6 +357,79 @@ button:disabled{
 .error:empty{
   display:none;
 }
+.review-panel{
+  margin-top:14px;
+}
+.review-tools{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:8px;
+}
+.review-tools input{
+  flex:1 1 220px;
+}
+.table-wrap{
+  overflow:auto;
+  max-height:360px;
+  border:1px solid #e5e7eb;
+  border-radius:8px;
+}
+table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:12px;
+  background:#fff;
+}
+th,td{
+  padding:8px 10px;
+  border-bottom:1px solid #e5e7eb;
+  text-align:left;
+  white-space:nowrap;
+}
+th{
+  position:sticky;
+  top:0;
+  background:#f5f3ff;
+  color:#312e81;
+}
+.grade-badge{
+  display:inline-block;
+  min-width:24px;
+  padding:3px 6px;
+  border-radius:999px;
+  background:#ede9fe;
+  color:#4c1d95;
+  text-align:center;
+  font-weight:600;
+}
+.insight-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:8px;
+  margin-top:10px;
+}
+.insight{
+  padding:8px;
+  border-radius:7px;
+  background:#f8fafc;
+  font-size:12px;
+}
+.insight b{
+  display:block;
+  margin-top:3px;
+  font-size:16px;
+  color:#312e81;
+}
+.distribution-warning{
+  margin-top:8px;
+  padding:8px 10px;
+  border-radius:6px;
+  background:#fff7ed;
+  border:1px solid #fed7aa;
+  color:#9a3412;
+  font-size:12px;
+}
 .notice{
   margin-top:10px;
   font-size:13px;
@@ -506,6 +579,8 @@ button.enabled{
       <div class="stat">Median<br><b id="med"></b></div>
     </div>
     <div class="grade-summary" id="gradeSummary"></div>
+    <div class="insight-grid" id="insights"></div>
+    <div class="distribution-warning" id="distributionWarning" hidden></div>
   </div>
   <!-- GRADING -->
   <div class="panel">
@@ -535,6 +610,20 @@ button.enabled{
     </div>
 
     <div id="thankyou" class="notice"></div>
+  </div>
+</div>
+
+<div class="panel review-panel">
+  <h3 class="panel-title">Student review</h3>
+  <p class="panel-help">Search individual records and verify calculated grades before finalizing.</p>
+  <div class="review-tools">
+    <input id="studentSearch" placeholder="Search by BITS ID or marks" aria-label="Search student records">
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>BITS ID</th><th>Total Marks</th><th>Grade</th></tr></thead>
+      <tbody id="studentRows"><tr><td colspan="3">Select a course to review students.</td></tr></tbody>
+    </table>
   </div>
 </div>
 
@@ -630,6 +719,19 @@ function safeMarksList(courseName) {
   return data.filter(d => normalizeCourseName(d[COLUMN_NAMES.course]) === normalizeCourseName(courseName))
     .map(d => parseMark(d[COLUMN_NAMES.marks]))
     .filter(n => n !== null);
+}
+
+function gradeForMark(mark) {
+  for (const g of GRADES) {
+    const minValue=+document.getElementById(g+"min").value;
+    const maxValue=+document.getElementById(g+"max").value;
+    if (mark >= minValue && mark <= maxValue) return g;
+  }
+  return "Ungraded";
+}
+
+function courseRows() {
+  return data.filter(row=>normalizeCourseName(row[COLUMN_NAMES.course])===normalizeCourseName(course.value));
 }
 
 function updateStatusRow() {
@@ -932,6 +1034,8 @@ function updateAll(){
   drawHistogram();
   computeStats();
   computeGradeSummary();
+  updateInsights();
+  renderStudentTable();
   updateStatusRow();
 }
 
@@ -1047,12 +1151,90 @@ function computeGradeSummary(){
   });
 }
 
+function updateInsights(){
+  const container=document.getElementById("insights");
+  const warning=document.getElementById("distributionWarning");
+  container.innerHTML="";
+  warning.hidden=true;
+  const marks=safeMarksList(course.value);
+  if(!marks.length || !document.getElementById(GRADES[0]+"min")) return;
+
+  const counts={};
+  GRADES.forEach(g=>counts[g]=0);
+  let ungraded=0;
+  courseRows().forEach(row=>{
+    const value=parseMark(row[COLUMN_NAMES.marks]);
+    const grade=gradeForMark(value);
+    if(counts[grade] !== undefined) counts[grade]++;
+    else ungraded++;
+  });
+  const highest=GRADES.find(g=>counts[g]>0) || "—";
+  const passCount=GRADES.filter(g=>g!=="E").reduce((sum,g)=>sum+counts[g],0);
+  const total=marks.length;
+  [
+    ["Students",total],
+    ["Pass rate",`${((passCount/total)*100).toFixed(1)}%`],
+    ["Highest grade",highest],
+    ["Ungraded",ungraded]
+  ].forEach(item=>{
+    const card=document.createElement("div");
+    card.className="insight";
+    card.textContent=item[0];
+    const value=document.createElement("b");
+    value.textContent=item[1];
+    card.appendChild(value);
+    container.appendChild(card);
+  });
+  if(ungraded){
+    warning.hidden=false;
+    warning.textContent=`${ungraded} student${ungraded===1 ? "" : "s"} fall outside the configured grade ranges and will not receive a grade in the export.`;
+  }
+}
+
+function renderStudentTable(){
+  const body=document.getElementById("studentRows");
+  const query=document.getElementById("studentSearch").value.trim().toLowerCase();
+  const rows=courseRows().filter(row=>{
+    const value=parseMark(row[COLUMN_NAMES.marks]);
+    const haystack=`${row[COLUMN_NAMES.id]} ${value}`.toLowerCase();
+    return !query || haystack.includes(query);
+  });
+  body.innerHTML="";
+  if(!rows.length){
+    body.innerHTML='<tr><td colspan="3">No matching student records.</td></tr>';
+    return;
+  }
+  rows.forEach(row=>{
+    const value=parseMark(row[COLUMN_NAMES.marks]);
+    const tr=document.createElement("tr");
+    [row[COLUMN_NAMES.id], value === null ? "Invalid" : value].forEach(value=>{
+      const td=document.createElement("td");
+      td.textContent=value;
+      tr.appendChild(td);
+    });
+    const gradeCell=document.createElement("td");
+    const badge=document.createElement("span");
+    badge.className="grade-badge";
+    badge.textContent=value === null ? "Excluded" : gradeForMark(value);
+    gradeCell.appendChild(badge);
+    tr.appendChild(gradeCell);
+    body.appendChild(tr);
+  });
+}
+
+studentSearch.oninput=renderStudentTable;
+
 download.onclick=()=>{
   const marks = safeMarksList(course.value);
   if (!marks.length) {
     thankyou.innerText = "No student data is available for this course to finalize.";
     return;
   }
+  const summary=GRADES.map(g=>{
+    const count=courseRows().filter(row=>gradeForMark(parseMark(row[COLUMN_NAMES.marks]))===g).length;
+    return `${g}: ${count}`;
+  }).join(", ");
+  if(!confirm(`Final review\n\nInstructor: ${instructor.value}\nCourse: ${course.value}\nStudents: ${marks.length}\n\n${summary}\n\nDownload these finalized grades?`)) return;
 
   finalizeCount++;
   clearInterval(timerInterval);
